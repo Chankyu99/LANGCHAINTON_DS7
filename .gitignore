@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+.env
+*.env
+secret.json
+config.py  # 만약 여기에 API 키를 넣으신다면 포함
+
+.DS_Store
+.vscode/
+.idea/
