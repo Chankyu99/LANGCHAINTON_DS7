@@ -40,7 +40,7 @@ git commit -m "작업 내용 요약 (예: 데이터 수집 완료)"
 git push origin 본인담당브랜치명
 ```
 
-🤝 4. 합치기 (Pull Request)
+## 🤝 4. 합치기 (Pull Request)
 깃허브 사이트의 Pull requests 탭에서 [New pull request] 클릭!
 
 Reviewers: 함께 작업하는 파트너를 지정해주세요.
