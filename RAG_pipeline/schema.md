@@ -1,83 +1,36 @@
-# Schema
+# 🚀 '기내뭐돼' 최종 RAG 파이프라인 계획안
 
-```mermaid
-graph TD
-    %% ==========================================
-    %% 1. 데이터 준비 (OFFLINE)
-    %% ==========================================
-    subgraph Data_Preparation ["1. 데이터 준비 및 색인 (Knowledge Base)"]
-        style Data_Preparation fill:#f9f9f9,stroke:#333,stroke-width:2px
-        
-        Source1[("📘 1. 국내선 보안 규정")]
-        Source2[("📕 2. 국제선 보안 규정")]
-        Source3[("🌍 3. 도착지 국가별 규정")]
-        Source4[("🧳 4. 위탁수하물 규정")]
-        Source5[("☠️ 5. 반입 금지 위험물")]
+## 1단계: 오프라인 데이터 적재 (Data Ingestion & Indexing)
 
-        Processor{{"⚙️ 데이터 전처리"}}
-        
-        Source1 & Source2 & Source3 & Source4 & Source5 --> Processor
-        
-        VectorDB[("🗄️ 벡터 DB (의미 검색)")]
-        KeywordDB[("🗄️ 키워드 DB (단어 검색)")]
-        
-        Processor --> VectorDB
-        Processor --> KeywordDB
-    end
+- 데이터 소스: 제공받은 index_docstore_export.jsonl 파일을 그대로 활용.
 
-    %% ==========================================
-    %% 2. 실시간 질문 처리 (ONLINE)
-    %% ==========================================
-    subgraph User_Flow ["2. 실시간 질문 및 답변 (Live Chat)"]
-        style User_Flow fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
-        
-        User((👤 사용자 질문)) --> |"사과 가져가도 돼?"| Safety_Check
-        
-        %% 단계 0: 위험물 1차 필터링 (가장 빠름)
-        Safety_Check{{"🚨 위험물 1차 체크<br>(국내/국제 상관없이 즉시 차단)"}}
-        Safety_Check --> |"폭발/인화성"| Route_Danger[🔍 5. 위험물 규정 즉시 검색]
-        Safety_Check --> |"일반 물품"| Context_Check
-        
-        %% 단계 1: 맥락 확인 및 되묻기 (새로 추가된 핵심 로직)
-        Context_Check{{"🤔 필수 정보 확인<br>(국내선/국제선 파악)"}}
-        Context_Check --> |"정보 부족"| Ask_User["💬 챗봇 되묻기:<br>'국제선인가요, 국내선인가요?'"]
-        Ask_User -.-> |"사용자 답변 (예: 국제선이요)"| User
-        
-        Context_Check --> |"정보 충분"| Intent_Router
-        
-        %% 단계 2: 의도에 따른 타겟 라우팅 (검색 효율 극대화)
-        Intent_Router{{"🧠 목적지 라우팅"}}
-        
-        Intent_Router --> |"국제선"| Route_Intl[🔍 2. 국제선 + 3. 도착지 규정만 검색]
-        Intent_Router --> |"국내선"| Route_Dom[🔍 1. 국내선 규정만 검색]
-        Intent_Router --> |"위탁 (짐 부치기)"| Route_Baggage[🔍 4. 위탁수하물 규정만 검색]
-        
-        %% 단계 3: 타겟팅된 검색 및 생성
-        Route_Danger --> Retriever
-        Route_Intl --> Retriever
-        Route_Dom --> Retriever
-        Route_Baggage --> Retriever
-        
-        Retriever[("📥 하이브리드 검색<br>(선택된 DB에서만 검색)")]
-        
-        Retriever --> |"정확도 높은 문서 추출"| LLM_Brain
-        
-        LLM_Brain["🤖 AI 답변 생성<br>타겟 문서 기반으로 정확하고 빠른 답변"]
-        
-        LLM_Brain --> Final_Answer[💬 최종 답변 제공]
-    end
+- 임베딩: OpenAI의 text-embedding-3-small 또는 유사한 성능의 임베딩 모델을 사용하여 page_content 텍스트를 벡터로 변환.
++2
 
-    %% 스타일링
-    classDef sources fill:#fff3e0,stroke:#e65100,stroke-width:2px;
-    classDef danger fill:#ffebee,stroke:#c62828,stroke-width:2px;
-    classDef logic fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    classDef clarify fill:#fff9c4,stroke:#fbc02d,stroke-width:2px;
-    
-    class Source1,Source2,Source3,Source4 sources;
-    class Source5,Route_Danger,Safety_Check danger;
-    class Intent_Router,LLM_Brain logic;
-    class Context_Check,Ask_User clarify;
-```
+- 메타데이터 분리 저장: recommended_metadata 안의 값들을 추출하여 벡터 DB(예: Chroma, Pinecone)의 메타데이터 필드에 정확히 매핑. 한국은 cabin_decision과 checked_decision으로 , 미국은 decision과 domain으로 구조화되어 있어 필터링에 아주 유리함
+
+## 2단계: 대화 상태 관리 및 의도 파악 (Router & Slot Filling)
+
+- 필수 슬롯 추출: 사용자의 질문에서 출발지, 도착지, 물품명을 추출.
+
+- 누락 정보 대응: 물품명이나 노선이 빠졌다면 즉시 되묻기 로직 실행.
+
+- 상세 속성 패스: 용량(Wh, ml) 등 상세 속성이 없어도 핑퐁 대화를 줄이기 위해 추가 질문 없이 즉시 다음 단계로 통과.
+
+- 예외 처리: 시스템이 지원하지 않는 노선이 들어오면 에러 메시지 출력 후 대기.
+
+## 3단계: 쿼리 재작성 및 하이브리드 검색 (Rewriter & Retriever)
+
+- 용어 정규화: 사용자의 구어체나 은어(예: 빠떼리)를 공식 데이터셋의 전문 용어(item)로 변환.
+
+- 교차 메타데이터 검색 (Self-Querying): 확정된 노선을 바탕으로 필터 조건을 자동 생성하여 Vector DB 검색. 한국 출발, 미국 도착이라면 jurisdiction: KR 데이터와 jurisdiction: US  데이터를 동시에 정확하게 끄집어냄.
 
 
+## 4단계: 최종 판정 및 답변 생성 (Judge & Generator)
 
+- 엄격한 판정 룰: 검색된 한국/미국 규정 중 단 하나라도 prohibited(금지) 상태라면 최종 답변은 무조건 [반입 불가]로 판정.
+
+
+- 조건부 범위 안내: 메타데이터가 conditional 또는 declaration_required 인 경우, 무작정 안 된다고 하지 않고 page_content의 상세내용을 참조하여 허용되는 범위와 신고 절차를 시니어 층도 이해하기 쉬운 친절한 대화체로 풀어서 안내.
+
+- 환각 방지 (우회 로직): 검색된 데이터에 없는 물품은 지어내지 않고, 항공사에 직접 문의하도록 가이드 메시지 출력.
