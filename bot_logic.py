@@ -13,6 +13,12 @@ schema.md 2~4단계 RAG 파이프라인 구현.
     : "칼" → DB에서 "날 길이 6cm 초과 칼", "도끼·손도끼·큰 식칼 등 절단용 칼" 매핑
     : "미숫가루" → DB에서 US "가공/캔 식품" 카테고리 매핑
 
+[v3 개선]
+  - DB 매핑 전체 실패 시 단순 Fallback → LLM 일반 지식 기반 답변으로 격상
+    : LLM이 물품을 추론 → 유사 카테고리 판단 → 항공 전문 지식으로 답변
+    : 답변 하단에 ⚠️ "DB 미등재 항목, 일반 규정 기반 안내" 단서 명시
+    : "보조배터리", "드라이기", "뜨개바늘" 등 DB 없는 물품 처리 가능
+
 단독 테스트:
     .venv/bin/python bot_logic.py
 """
@@ -205,19 +211,27 @@ def map_item_to_db(item: str, jurisdictions: list[str]) -> dict[str, list[str]]:
     return result
 
 
-def retrieve_docs(slots: dict) -> list[dict]:
+def retrieve_docs(slots: dict) -> tuple[list[dict], bool]:
     """
     확정된 슬롯으로 ChromaDB에서 관련 문서 검색.
     [v2] DB 목록 매핑 결과로 검색 쿼리를 구성.
+    [v3] 매핑 전체 실패 여부를 두 번째 반환값으로 제공.
+
+    Returns:
+        (retrieved_docs, all_mapping_failed)
+        - all_mapping_failed=True  → 모든 jurisdiction에서 매핑 실패 → v3 일반지식 Fallback 필요
     """
-    item      = slots.get("item", "")
-    departure = slots.get("departure", "KR")
-    arrival   = slots.get("arrival", "US")
+    item          = slots.get("item", "")
+    departure     = slots.get("departure", "KR")
+    arrival       = slots.get("arrival", "US")
     jurisdictions = list({departure, arrival})
 
     # DB 항목 매핑
     mapped = map_item_to_db(item, jurisdictions)
     print(f"[retrieve_docs] mapped: {mapped}")  # 디버그 로그
+
+    # 모든 jurisdiction에서 매핑이 비었는지 체크
+    all_mapping_failed = all(len(mapped.get(jur, [])) == 0 for jur in jurisdictions)
 
     all_docs = []
     seen_ids = set()
@@ -226,10 +240,8 @@ def retrieve_docs(slots: dict) -> list[dict]:
         matched_items = mapped.get(jur, [])
 
         if matched_items:
-            # 매핑된 항목명들을 쿼리로 사용
             query = " ".join(matched_items) + " " + item
         else:
-            # 매핑 실패 → 원래 물품명으로 시도
             query = item
 
         results = vectorstore.similarity_search_with_score(
@@ -239,11 +251,9 @@ def retrieve_docs(slots: dict) -> list[dict]:
         )
 
         for doc, score in results:
-            doc_id = doc.metadata.get("doc_id", id(doc))
+            doc_id       = doc.metadata.get("doc_id", id(doc))
             db_item_name = doc.metadata.get("item", "")
 
-            # 매핑된 항목이 있으면 → 해당 항목만 수락 (정밀 필터)
-            # 매핑 실패면 → score 기준으로 수락
             if matched_items:
                 if db_item_name in matched_items:
                     if doc_id not in seen_ids:
@@ -253,7 +263,6 @@ def retrieve_docs(slots: dict) -> list[dict]:
                             "jurisdiction": jur, "mapped": True
                         })
             else:
-                # 매핑 실패한 경우에만 score 임계값 적용
                 if score <= 1.2 and doc_id not in seen_ids:
                     seen_ids.add(doc_id)
                     all_docs.append({
@@ -261,7 +270,7 @@ def retrieve_docs(slots: dict) -> list[dict]:
                         "jurisdiction": jur, "mapped": False
                     })
 
-    return all_docs
+    return all_docs, all_mapping_failed
 
 
 # ─────────────────────────────────────────────────────────────
@@ -284,6 +293,25 @@ JUDGE_SYSTEM_PROMPT = """당신은 항공 규정 챗봇 '기내뭐돼'입니다.
 6. 불확실한 경우 억측하지 말고 정중히 안내 후 항공사 고객센터 연락 권고
 7. 한국어로 친절하게 답변"""
 
+# [v3] DB에 없는 물품용 일반 지식 기반 프롬프트
+GENERAL_KNOWLEDGE_SYSTEM_PROMPT = """당신은 항공 보안 및 세관 규정 전문가 챗봇 '기내뭐돼'입니다.
+사용자가 물어본 물품이 규정 데이터베이스에 등록되지 않은 항목입니다.
+
+다음 절차로 답변하세요:
+1. 물품의 특성을 파악하여 어떤 항공 규정 카테고리에 해당할지 추론
+   (예: 보조배터리 → 리튬이온 배터리류 → IATA 위험물 규정 적용)
+2. 국제 항공 규정(IATA·TSA·ICAO) 일반 기준으로 판정
+3. 노선(출발국·도착국)별로 다를 수 있는 규정 차이 언급
+4. 답변 형식:
+   - 첫 줄: 🟢/🟡/🔴 판정 + 한 줄 요약
+   - Bullet Point 2~3줄로 조건·수치 안내
+   - 마지막 줄: ⚠️ 단서 문구 (아래 고정 문구 사용)
+5. 확신이 없는 부분은 억측하지 않고 "항공사 확인 권장" 명시
+6. 한국어로 답변
+
+고정 단서 문구 (반드시 마지막에 포함):
+⚠️ 이 답변은 공식 DB에 없는 항목으로, IATA 일반 항공 규정 기반 안내입니다. 정확한 규정은 이용 항공사 또는 [항공보안365](https://www.avsec365.or.kr)에서 확인하세요."""
+
 FALLBACK_MSG = (
     "😓 죄송합니다. 해당 물품에 대한 규정 정보를 데이터베이스에서 찾지 못했습니다.\n\n"
     "정확한 정보를 위해 이용하실 **항공사 고객센터** 또는 "
@@ -292,10 +320,7 @@ FALLBACK_MSG = (
 
 
 def generate_answer(user_message: str, slots: dict, retrieved: list[dict]) -> str:
-    """검색 결과 기반 최종 답변 생성."""
-    if not retrieved:
-        return FALLBACK_MSG
-
+    """[DB 매핑 성공] 검색 결과 기반 최종 답변 생성."""
     context_parts = []
     for r in retrieved:
         doc  = r["doc"]
@@ -323,6 +348,26 @@ def generate_answer(user_message: str, slots: dict, retrieved: list[dict]) -> st
 
     response = llm.invoke([
         SystemMessage(content=JUDGE_SYSTEM_PROMPT),
+        HumanMessage(content=prompt),
+    ])
+    return response.content
+
+
+def general_knowledge_answer(user_message: str, slots: dict) -> str:
+    """[v3] DB 매핑 전체 실패 시 LLM 일반 항공 지식으로 추론·답변."""
+    departure = slots.get("departure", "?")
+    arrival   = slots.get("arrival", "?")
+    item      = slots.get("item", "?")
+
+    prompt = f"""노선: {departure} → {arrival}
+사용자가 물어본 물품: "{item}"
+사용자 질문: {user_message}
+
+이 물품은 규정 DB에 등록되지 않은 항목입니다.
+물품의 특성을 추론하고, 국제 항공 규정(IATA·TSA) 일반 기준으로 답변해주세요."""
+
+    response = llm.invoke([
+        SystemMessage(content=GENERAL_KNOWLEDGE_SYSTEM_PROMPT),
         HumanMessage(content=prompt),
     ])
     return response.content
@@ -364,10 +409,19 @@ def run_pipeline(
         return missing_q, updated_slots
 
     # 3단계: DB 매핑 + 검색
-    retrieved = retrieve_docs(updated_slots)
+    retrieved, all_mapping_failed = retrieve_docs(updated_slots)
 
     # 4단계: 답변 생성
-    answer = generate_answer(user_message, updated_slots, retrieved)
+    if retrieved:
+        # DB에서 문서를 찾은 경우 → 정규 RAG 답변
+        answer = generate_answer(user_message, updated_slots, retrieved)
+    elif all_mapping_failed:
+        # [v3] DB 매핑 자체가 전혀 안 된 경우 → LLM 일반 지식 답변
+        print(f"[run_pipeline] DB 매핑 실패 → 일반 지식 Fallback: {updated_slots.get('item')}")
+        answer = general_knowledge_answer(user_message, updated_slots)
+    else:
+        # 매핑은 됐으나 score 초과로 문서 없음 → 기존 Fallback
+        answer = FALLBACK_MSG
 
     return answer, updated_slots
 
@@ -377,23 +431,28 @@ def run_pipeline(
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("=" * 60)
-    print("🛫 기내뭐돼 v2 — DB 매핑 개선 테스트")
+    print("🛫 기내뭐돼 v3 — 일반지식 Fallback 테스트")
     print("=" * 60)
 
     test_cases = [
         {
-            "desc": "v2 신규: 칼 (DB에 직접 없음)",
-            "message": "한국에서 미국 갈 때 칼 가져갈 수 있어?",
+            "desc": "v3 신규: 보조배터리 (DB 미등재)",
+            "message": "한국→미국 보조배터리 기내 반입 가능해?",
             "slots": {},
         },
         {
-            "desc": "v2 신규: 미숫가루 (DB에 없는 식품)",
-            "message": "미국으로 미숫가루 반입 가능해?",
+            "desc": "v3 신규: 드라이기 (DB 미등재)",
+            "message": "드라이기는 가져갈 수 있어?",
             "slots": {"departure": "KR", "arrival": "US"},
         },
         {
-            "desc": "기존 정상 케이스: 고추장",
-            "message": "고추장은?",
+            "desc": "v2 유지: 칼 (DB 간접 매핑)",
+            "message": "칼은?",
+            "slots": {"departure": "KR", "arrival": "US"},
+        },
+        {
+            "desc": "v2 유지: 미숫가루 (US 식품 매핑)",
+            "message": "미숫가루는?",
             "slots": {"departure": "KR", "arrival": "US"},
         },
     ]
