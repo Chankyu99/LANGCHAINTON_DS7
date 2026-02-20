@@ -1,0 +1,20 @@
+# pip install 필요한 라이브러리 목록
+# 본인 가상환경에서 pip install -r erquirements.txt 라고 치시면 됩니다.
+# 나중에 사용할 라이브러리 정리할 예정
+
+# 1. 화면 그리는 용도 (app.py에서 씀)
+streamlit
+
+# 2. RAG 파이프라인 뼈대 (bot_logic.py에서 씀)
+langchain
+langchain-community
+langchain-core
+
+# 3. OpenAI 모델 및 임베딩 (gpt-5-mini, text-embedding-3-small)
+langchain-openai
+openai
+tiktoken
+
+# 4. 벡터 데이터베이스 (Chroma DB)
+langchain-chroma
+chromadb

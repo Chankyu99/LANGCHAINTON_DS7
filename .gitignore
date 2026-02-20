@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+.env
+*.env
+secret.json
+config.py
+
+.DS_Store
+.vscode/
+.idea/
+.streamlit/
