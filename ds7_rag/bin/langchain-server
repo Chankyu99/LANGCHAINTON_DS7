@@ -1,0 +1,6 @@
+#!/Users/corinnekim/LANGCHAINTON_DS7/ds7_rag/bin/python3.11
+import sys
+from langchain.server import main
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(main())
