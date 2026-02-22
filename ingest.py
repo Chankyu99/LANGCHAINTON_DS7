@@ -22,10 +22,18 @@ load_dotenv()
 
 # ── 경로 설정 ──────────────────────────────────────────────────
 BASE_DIR   = Path(__file__).parent
-DATA_FILE  = BASE_DIR / "data" / "index_docstore_export.jsonl"
+DATA_FILE_ORIGINAL = BASE_DIR / "data" / "index_docstore_export.jsonl"
+DATA_FILE_AUGMENTED = BASE_DIR / "data" / "index_docstore_augmented.jsonl"
 CHROMA_DIR = BASE_DIR / "chroma_db"
 COLLECTION_NAME = "airline_regulations"
 
+
+def get_data_file() -> Path:
+    """존재하는 데이터 파일을 가져온다. augmented 파일이 존재하면 우선 적용한다."""
+    if DATA_FILE_AUGMENTED.exists():
+        print(f"✨ 증강된(Augmented) 데이터 파일을 발견하여 우선 적용합니다: {DATA_FILE_AUGMENTED.name}")
+        return DATA_FILE_AUGMENTED
+    return DATA_FILE_ORIGINAL
 
 def load_jsonl(filepath: Path) -> list[dict]:
     """JSONL 파일을 읽어 dict 리스트로 반환."""
@@ -72,7 +80,8 @@ def main():
         print("   재생성하려면 chroma_db/ 폴더를 삭제 후 다시 실행하세요.")
         return
 
-    # 1) 데이터 로드
+    # 1) 데이터 로드 찾기
+    DATA_FILE = get_data_file()
     print(f"\n📂 데이터 파일 로드 중: {DATA_FILE}")
     records = load_jsonl(DATA_FILE)
     print(f"   → {len(records)}개 레코드 발견")
