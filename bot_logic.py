@@ -45,7 +45,8 @@ MAX_MAPPED      = 3          # LLM이 선택할 최대 DB 항목 수
 
 # ── 모델 초기화 ────────────────────────────────────────────────
 embeddings  = OpenAIEmbeddings(model="text-embedding-3-small")
-llm         = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm         = ChatOpenAI(model="gpt-5-mini", temperature=0)
+advanced_llm = ChatOpenAI(model="gpt-5.2", temperature=0.2)
 vectorstore = Chroma(
     collection_name=COLLECTION_NAME,
     embedding_function=embeddings,
@@ -366,7 +367,7 @@ def general_knowledge_answer(user_message: str, slots: dict) -> str:
 이 물품은 규정 DB에 등록되지 않은 항목입니다.
 물품의 특성을 추론하고, 국제 항공 규정(IATA·TSA) 일반 기준으로 답변해주세요."""
 
-    response = llm.invoke([
+    response = advanced_llm.invoke([
         SystemMessage(content=GENERAL_KNOWLEDGE_SYSTEM_PROMPT),
         HumanMessage(content=prompt),
     ])
