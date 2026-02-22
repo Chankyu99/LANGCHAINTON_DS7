@@ -21,11 +21,13 @@
 LANGCHAINTON_DS7/
 ├── app.py              # Streamlit 챗봇 UI
 ├── bot_logic.py        # RAG 파이프라인 핵심 로직 (슬롯필링, 검색, 판정, 생성)
+├── data_augmenter.py   # [NEW] 원본 데이터에 사용자 검색 키워드/유의어 자동 증강 스크립트
 ├── ingest.py           # 데이터 임베딩 스크립트 (최초 1회 실행)
 ├── requirements.txt    # 의존성 패키지 목록
 │
 ├── data/
-│   └── index_docstore_export.jsonl   # 항공 규정 원문 데이터 (84개 문서)
+│   ├── index_docstore_export.jsonl     # 항공 규정 원문 데이터 (84개 문서)
+│   └── index_docstore_augmented.jsonl  # [NEW] LLM으로 검색 키워드가 증강·추가된 데이터셋 
 │
 ├── RAG_pipeline/
 │   └── schema.md       # RAG 파이프라인 설계 계획서
@@ -53,9 +55,13 @@ python3 -m venv .venv
 OPENAI_API_KEY=sk-...
 ```
 
-### 3. 데이터 임베딩 (최초 1회)
+### 3. 데이터 증강 및 임베딩 (최초 1회)
 
 ```bash
+# 1) 원본 데이터에 다양한 질문을 커버할 수 있도록 키워드 증강 (약 1분 소요)
+.venv/bin/python data_augmenter.py
+
+# 2) 증강된 데이터를 Vector DB에 주입하여 검색 준비
 .venv/bin/python ingest.py
 ```
 
@@ -73,9 +79,10 @@ OPENAI_API_KEY=sk-...
 
 | 단계 | 이름 | 내용 |
 |------|------|------|
-| 1단계 | Data Ingestion | JSONL → text-embedding-3-small → ChromaDB |
-| 2단계 | Router & Slot Filling | GPT로 노선·물품 슬롯 추출, 미확정 시 재질문 |
-| 3단계 | Rewriter & Retriever | 용어 정규화 + 메타데이터 필터 벡터 검색 |
+| 0단계 | Data Augmentation | (오프라인) GPT-4o-mini를 활용하여 각 규정에 대해 10~15개의 문맥 동의어/검색 키워드 대량 증강 |
+| 1단계 | Data Ingestion    | JSONL → text-embedding-3-small → ChromaDB |
+| 2단계 | Router & Slot Filling| GPT로 노선·물품 슬롯 추출, 미확정 시 재질문 |
+| 3단계 | Rewriter & Retriever | 용어 정규화 + 메타데이터 필터 벡터 검색 (검색 100% 실패 시 범용 지식용 `gpt-5.2` Fallback 가동) |
 | 4단계 | Judge & Generator | 이모지 판정 + Bullet Point 답변 생성 |
 
 자세한 설계는 [RAG_pipeline/schema.md](./RAG_pipeline/schema.md) 참고.
@@ -84,8 +91,10 @@ OPENAI_API_KEY=sk-...
 
 ## 기술 스택
 
-- **LLM**: GPT-4o-mini (OpenAI)
-- **Embedding**: text-embedding-3-small (OpenAI)
+- **LLM**:
+  - ⚙️ **기본 파이프라인**: `gpt-4o-mini` (속도 및 비용 효율성 최적화)
+  - 🧠 **일반 지식Fallback**: `gpt-5.2` (DB 미등재 물품에 대해 최상위 플래그십 AI로 깊이 있는 추론 제공)
+- **Embedding**: `text-embedding-3-small` (OpenAI)
 - **Vector DB**: ChromaDB
 - **Framework**: LangChain
 - **UI**: Streamlit
